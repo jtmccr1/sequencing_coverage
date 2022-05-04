@@ -18,7 +18,7 @@
 ## outroot becomes a prefix to output files
 ## postcode is the name (including path) of the file containing postcodes and LAs
 ## days is the number of days prior over which to sum the numbers of cases and samples
-## dup is an RDS file with a vector of central_sample_id values that are to be assigned weight 0
+## dup is an RDS file with a vector of sequence_name values that are to be assigned weight 0
 ##
 
 
@@ -88,8 +88,8 @@ require( dplyr,quietly=T,warn.conflicts=F )
 ## read in arguments ######################################################
 w <- 14 # time interval for aggregation, days
 postcodefile <- 'postcode_to_la.csv'
-outroot <- 'a0-'
-path_to_phe_data <- dup_file <- NULL
+outroot <- ''
+path_to_phe_data <- dup_file <-metadata <- NULL
 args = commandArgs(trailingOnly=TRUE)
 #if(length(args)==0) args <- c('--outroot', 'a0-','--postcode','postcode_to_la.csv','--days','14','--phepath','./')
 inds <- which(grepl('--',args))
@@ -104,8 +104,10 @@ for(i in inds){
     path_to_phe_data <- paste0(args[i+1],'/')
   if(args[i]=='--dup')
     dup_file <- args[i+1]
+  if(args[i]=='--metadata')
+    metadata <- args[i+1]
 }
-cat(paste0('\nCall:\n  Rscript compute_weights.R --outroot ',outroot,' --postcode ',postcodefile,' --days ',w,' --phepath ',path_to_phe_data,' --dup ',dup_file,'\n\n'))
+cat(paste0('\nCall:\n  Rscript compute_weights.R --outroot ',outroot,' --postcode ',postcodefile,' --days ',w,' --phepath ',path_to_phe_data,' --dup ',dup_file,' --metadata ',metadata,'\n\n'))
 
 ## read in metadata #######################################################
 cat(' -- Reading postcode mapping;\n')
@@ -124,24 +126,21 @@ for(i in 1:2){
 pcdf$postcode <- tolower(pcdf$postcode)
 
 cat(' -- Reading metadata;\n')
-path <- '/cephfs/covid/bham/results/phylogenetics/latest/alignments/'
-ext <- list.files(path)
 # alignment: 
-md_fn = paste0(path,ext[grepl('metadata',ext)&grepl('all',ext)])
-phedf = read.csv(md_fn, stringsAs=FALSE)
+phedf = read.csv(metadata, stringsAs=FALSE)
 
 # supplement/replace with phe postcodes
 if(!is.null(path_to_phe_data)){
   phe_files <- list.files(path_to_phe_data)
   phe_file <- phe_files[which.max(file.mtime(paste0(path_to_phe_data,phe_files)))]
   phedf2 = read.csv( paste0(path_to_phe_data,phe_file) , stringsAs=FALSE)
-  phedf2 <- subset(phedf2,central_sample_id%in%phedf$central_sample_id)
-  phedf$outer_postcode[match(phedf2$central_sample_id,phedf$central_sample_id)] <- phedf2$outer_postcode
+  phedf2 <- subset(phedf2,sequence_name%in%phedf$sequence_name)
+  phedf$outer_postcode[match(phedf2$sequence_name,phedf$sequence_name)] <- phedf2$outer_postcode
 }
 
 phedf$outerpostcode <- tolower(phedf$outer_postcode)
 
-#phedf$date <- dmy( phedf$sampledate  )
+#phedf$date <- ymd( phedf$sample_date  )
 cat(' -- Extracting date from metadata;\n')
 phedf$date <- ymd( phedf$collection_date ) #sampledate  )
 #phedf$ltlacd = pcdf$LTLA19CD[ match( phedf$outerpostcode, pcdf$postcode) ]
@@ -332,15 +331,15 @@ weightdfs = lapply( phedfs , function( .phedf ){
   })	
   ws = tryCatch(  ws/mean( ws,na.rm=T ) , warning=function(w) {},
                  error = function(e) cat(paste0('Error on date ',d,';\n',e,'\n')) )
-  data.frame( central_sample_id  = .phedf$central_sample_id, coverage_weight = unname( ws ) , stringsAsFactors=FALSE )
+  data.frame( sequence_name  = .phedf$sequence_name, coverage_weight = unname( ws ) , stringsAsFactors=FALSE )
 })
 wdf = do.call( rbind, weightdfs )
-weightfile <- paste0(outroot,'weightsdf-',today(),'.csv') 
+weightfile <- paste0(outroot,'weightsdf.csv') 
 
 wdf$person_weight <- 1
 if(!is.null(dup_file)){
   dupcsi <- readRDS(dup_file)
-  wdf$person_weight[wdf$central_sample_id%in%dupcsi] <- 0
+  wdf$person_weight[wdf$sequence_name%in%dupcsi] <- 0
 }
 
 write.csv(  wdf, row.names=F , file = weightfile) 
@@ -428,14 +427,14 @@ coverage2week$lamn_weight[is.na(coverage2week$lamn_weight)] <- 0
 coverage2week$la_weight[is.na(coverage2week$la_weight)] <- 0
 
 ## append to phedf
-weighted_phedf <- phedf[,colnames(phedf)%in%c('central_sample_id','date','ltlacd')]
+weighted_phedf <- phedf[,colnames(phedf)%in%c('sequence_name','date','ltlacd')]
 colnames(weighted_phedf)[3] <- 'LTLA19CD'
 weighted_phedf <- left_join(weighted_phedf,
                             coverage2week[,colnames(coverage2week)%in%c('lamn_weight','la_weight','wk_weight','mn_weight','LTLA19CD','date')],
                             by=c('LTLA19CD','date'))
-weighted_phedf <- left_join(weighted_phedf,wdf,by='central_sample_id')
+weighted_phedf <- left_join(weighted_phedf,wdf,by='sequence_name')
 saveRDS(weighted_phedf,'weight_by_week_la.Rds')
 
-write.csv(weighted_phedf[,colnames(weighted_phedf)%in%c('lamn_weight','la_weight','wk_weight','mn_weight','central_sample_id')],
+write.csv(weighted_phedf[,colnames(weighted_phedf)%in%c('lamn_weight','la_weight','wk_weight','mn_weight','sequence_name')],
           'weight_options.csv',row.names = F)
 
